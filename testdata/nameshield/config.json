@@ -1,0 +1,6 @@
+{
+  "apiKeySecretRef": {
+    "name": "nameshield-secret",
+    "key": "api-key"
+  }
+}
