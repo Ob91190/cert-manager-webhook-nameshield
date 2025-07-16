@@ -1,0 +1,44 @@
+# Git files
+.git
+.gitignore
+.gitlab-ci.yml
+README.md
+
+# Documentation
+*.md
+docs/
+
+# Test files
+*_test.go
+testdata/
+_test/
+
+# Cache and temporary files
+.cache/
+tmp/
+.tmp/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts (except the ones we need)
+webhook
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Helm charts (we build them separately)
+deploy/
+charts/
+
+# CI/CD files
+.gitlab-ci.yml
+Makefile

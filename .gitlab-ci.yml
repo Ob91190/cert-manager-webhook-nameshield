@@ -1,0 +1,149 @@
+# GitLab CI/CD Pipeline for cert-manager-webhook-nameshield
+# This pipeline builds a Docker image and pushes it to the registry
+
+variables:
+  # Docker registry configuration
+  REGISTRY: "registry.antemeta.io"
+  IMAGE_NAME: "$REGISTRY/devops/cert-manager-webhook-nameshield"
+  
+  # Docker driver for BuildKit
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: "/certs"
+  DOCKER_BUILDKIT: 1
+
+stages:
+  - test
+  - build
+  - deploy
+
+# Cache Go modules for faster builds
+cache:
+  paths:
+    - .cache/go-mod/
+
+# Test stage - run Go tests
+test:
+  stage: test
+  image: golang:1.22-alpine3.19
+  before_script:
+    - apk add --no-cache git make
+    - export GOPATH="$CI_PROJECT_DIR/.cache/go-mod"
+    - export PATH="$GOPATH/bin:$PATH"
+  script:
+    - go version
+    - go mod download
+    - go mod verify
+    - go vet ./...
+    - go test -v ./...
+  only:
+    - branches
+    - merge_requests
+    - tags
+
+# Build and push Docker image
+build:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  before_script:
+    # Login to the registry
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $REGISTRY -u "$CI_REGISTRY_USER" --password-stdin
+  script:
+    # Build the image with multiple tags
+    - |
+      if [ "$CI_COMMIT_REF_NAME" = "master" ] || [ "$CI_COMMIT_REF_NAME" = "main" ]; then
+        # For master/main branch, tag as latest and with commit SHA
+        docker build -t $IMAGE_NAME:latest -t $IMAGE_NAME:$CI_COMMIT_SHA .
+        docker push $IMAGE_NAME:latest
+        docker push $IMAGE_NAME:$CI_COMMIT_SHA
+        echo "Built and pushed: $IMAGE_NAME:latest"
+        echo "Built and pushed: $IMAGE_NAME:$CI_COMMIT_SHA"
+      elif [ -n "$CI_COMMIT_TAG" ]; then
+        # For tags, use the tag name
+        docker build -t $IMAGE_NAME:$CI_COMMIT_TAG -t $IMAGE_NAME:latest .
+        docker push $IMAGE_NAME:$CI_COMMIT_TAG
+        docker push $IMAGE_NAME:latest
+        echo "Built and pushed: $IMAGE_NAME:$CI_COMMIT_TAG"
+        echo "Built and pushed: $IMAGE_NAME:latest"
+      else
+        # For feature branches, use branch name and commit SHA
+        BRANCH_NAME=$(echo $CI_COMMIT_REF_NAME | tr '/' '-')
+        docker build -t $IMAGE_NAME:$BRANCH_NAME-$CI_COMMIT_SHORT_SHA .
+        docker push $IMAGE_NAME:$BRANCH_NAME-$CI_COMMIT_SHORT_SHA
+        echo "Built and pushed: $IMAGE_NAME:$BRANCH_NAME-$CI_COMMIT_SHORT_SHA"
+      fi
+  after_script:
+    - docker logout $REGISTRY
+  only:
+    - branches
+    - tags
+  except:
+    - schedules
+
+# Build development image for merge requests
+build:dev:
+  stage: build
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $REGISTRY -u "$CI_REGISTRY_USER" --password-stdin
+  script:
+    # Build image for merge requests with MR identifier
+    - docker build -t $IMAGE_NAME:mr-$CI_MERGE_REQUEST_IID-$CI_COMMIT_SHORT_SHA .
+    - docker push $IMAGE_NAME:mr-$CI_MERGE_REQUEST_IID-$CI_COMMIT_SHORT_SHA
+    - echo "Built and pushed:" $IMAGE_NAME:mr-$CI_MERGE_REQUEST_IID-$CI_COMMIT_SHORT_SHA
+  after_script:
+    - docker logout $REGISTRY
+  only:
+    - merge_requests
+
+# Deploy stage - update Helm values (optional)
+deploy:staging:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache git
+  script:
+    - echo "Deployment to staging environment"
+    - echo "Image tag:" $CI_COMMIT_SHA
+  only:
+    - master
+    - main
+  when: manual
+
+deploy:production:
+  stage: deploy
+  image: alpine:latest
+  before_script:
+    - apk add --no-cache git
+  script:
+    - echo "Deployment to production environment"
+    - echo "Image tag:" $CI_COMMIT_TAG
+  only:
+    - tags
+  when: manual
+
+# Security scan (optional)
+security:scan:
+  stage: test
+  image: docker:24-dind
+  services:
+    - docker:24-dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login $REGISTRY -u "$CI_REGISTRY_USER" --password-stdin
+  script:
+    # Build image for scanning
+    - docker build -t $IMAGE_NAME:scan-$CI_COMMIT_SHORT_SHA .
+    # You can add vulnerability scanning here with tools like:
+    # - Trivy: docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image $IMAGE_NAME:scan-$CI_COMMIT_SHORT_SHA
+    # - Clair, Snyk, etc.
+    - echo "Security scanning completed"
+  after_script:
+    - docker logout $REGISTRY
+  allow_failure: true
+  only:
+    - merge_requests
+    - master
+    - main
